@@ -18,27 +18,51 @@ def analyze_patient_cohorts(input_file: str) -> pl.DataFrame:
     pl.read_csv(input_file).write_parquet("patients_large.parquet")
     
     # Create a lazy query to analyze cohorts
-    cohort_results = pl.scan_parquet("patients_large.parquet").pipe(
-        lambda df: df.filter((pl.col("BMI") >= 10) & (pl.col("BMI") <= 60))
-    ).pipe(
-        lambda df: df.select(["BMI", "Glucose", "Age"])
-    ).pipe(
-        lambda df: df.with_columns(
-            pl.col("BMI").cut(
-                breaks=[10, 18.5, 25, 30, 60],
-                labels=["Underweight", "Normal", "Overweight", "Obese"],
-                left_closed=True
-            ).alias("bmi_range")
+    # removed pipes to check each part of script easier
+    cohort_results = pl.scan_parquet("patients_large.parquet").filter(
+        (pl.col("BMI") >= 10) & (pl.col("BMI") <= 60)
+    ).select(["BMI", "Glucose", "Age"])
+
+    '''        
+    # Check the filtered data
+    print("Filtered data preview:")
+    print(cohort_results.collect().head(5))
+    '''
+
+    # try/except to check for bugs
+    try:
+        # manually categorize BMI
+        # this was done because of an error (I don't know why this solved it, but it did)
+        cohort_results = cohort_results.with_columns(
+            pl.when(pl.col("BMI") < 18.5).then(pl.lit("Underweight"))
+            .when((pl.col("BMI") >= 18.5) & (pl.col("BMI") < 25)).then(pl.lit("Normal"))
+            .when((pl.col("BMI") >= 25) & (pl.col("BMI") < 30)).then(pl.lit("Overweight"))
+            .otherwise(pl.lit("Obese"))
+            .alias("bmi_range")
         )
-    ).pipe(
-        lambda df: df.groupby("bmi_range").agg([
+    except Exception as e:
+        print("Error in BMI categorization:", e)
+        return None
+    
+    '''
+    # checking bmi categories
+    print("Categorized Data (Preview):")
+    print(cohort_results.collect().head(5))
+    '''
+
+    # try/except to check for bugs
+    try:
+        cohort_results = cohort_results.group_by("bmi_range").agg([
             pl.col("Glucose").mean().alias("avg_glucose"),
-            pl.count().alias("patient_count"),
+            pl.len().alias("patient_count"), # pl.count is deprecated --> changed to pl.len
             pl.col("Age").mean().alias("avg_age")
-        ])
-    ).collect(streaming=True)
+        ]).collect()
+    except Exception as e:
+        print("Error in final grouping:", e)
+        return None
     
     return cohort_results
+
 
 def main():
     # Input file
